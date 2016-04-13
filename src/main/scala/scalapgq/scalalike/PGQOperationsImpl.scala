@@ -2,38 +2,45 @@ package scalapgq.scalalike
 
 import scalapgq._
 import org.joda.time.{DateTime, Duration, Period}
+import scala.concurrent.{ExecutionContext, Future}
 
 class PGQOperationsImpl(url: String, user: String, password: String) extends PGQOperations {
   import scalikejdbc._
+  import scalikejdbc.async._
+  import scalikejdbc.async.FutureImplicits._
   
-  type Session = DBSession
+  type Session = TxAsyncDBSession
   
-  val cp = CommonsConnectionPoolFactory.apply(url, user, password)
+  val acp = AsyncConnectionPoolFactory.apply(url, user, password, AsyncConnectionPoolSettings(maxPoolSize=1, maxQueueSize=1))
   
-  override def localTx[A](execution: DBSession => A) = using(DB(cp.borrow())){db => db.localTx { execution}} 
-  
-  override def createQueue(queueName: String)(implicit s: Session): Boolean = {
-    sql"select pgq.create_queue(${queueName})".map(_.boolean(1)).single.apply().getOrElse(false)
+  override def localAsyncTx[A](execution: Session => Future[A])(implicit ec: ExecutionContext): Future[A] = {
+    acp.borrow().toNonSharedConnection()
+      .map { nonSharedConnection => TxAsyncDBSession(nonSharedConnection) }
+      .flatMap { tx => AsyncTx.inTransaction[A](tx, execution) }
   }
-  override def dropQueue(queueName: String, force: Boolean = false)(implicit s: Session): Boolean = {
-    sql"select pgq.drop_queue(${queueName}, ${force})".map(_.boolean(1)).single.apply().getOrElse(false)
+  
+  override def createQueue(queueName: String)(implicit s: Session, ec: ExecutionContext): Future[Boolean] = {
+    sql"select pgq.create_queue(${queueName})".map(_.boolean(1)).single.future().map(_.getOrElse(false))
+  }
+  override def dropQueue(queueName: String, force: Boolean = false)(implicit s: Session, ec: ExecutionContext): Future[Boolean] = {
+    sql"select pgq.drop_queue(${queueName}, ${force})".map(_.boolean(1)).single.future().map(_.getOrElse(false))
   }
 
-  override def registerConsumer(queueName: String, consumerName: String)(implicit s: Session): Boolean = {
-    sql"select pgq.register_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.apply().getOrElse(false)
+  override def registerConsumer(queueName: String, consumerName: String)(implicit s: Session, ec: ExecutionContext): Future[Boolean] = {
+    sql"select pgq.register_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.future().map(_.getOrElse(false))
   }
-  override def unRegisterConsumer(queueName: String, consumerName: String)(implicit s: Session): Boolean = {
-    sql"select pgq.unregister_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.apply().getOrElse(false)
+  override def unRegisterConsumer(queueName: String, consumerName: String)(implicit s: Session, ec: ExecutionContext): Future[Boolean] = {
+    sql"select pgq.unregister_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.future().map(_.getOrElse(false))
   }
   
-  override def nextBatch(queueName: String, consumerName: String)(implicit s: Session): Option[Long] = {
+  override def nextBatch(queueName: String, consumerName: String)(implicit s: Session, ec: ExecutionContext): Future[Option[Long]] = {
     sql"select next_batch from pgq.next_batch(${queueName}, ${consumerName})"
       .map(rs => rs.longOpt("next_batch"))
-      .single
-      .apply()
-      .flatten
+      .single()
+      .future()
+      .map(_.flatten)
   }
-  def getBatchEvents(batchId: Long)(implicit s: Session): Iterable[Event] = {
+  def getBatchEvents(batchId: Long)(implicit s: Session, ec: ExecutionContext): Future[Iterable[Event]] = {
     sql"select * from pgq.get_batch_events(${batchId})"
       .map(rs => new Event(
         rs.long("ev_id"),
@@ -47,25 +54,25 @@ class PGQOperationsImpl(url: String, user: String, password: String) extends PGQ
         rs.stringOpt("ev_extra3"),
         rs.stringOpt("ev_extra4")))
       .list
-      .apply()
+      .future()
   }
-  def finishBatch(batchId: Long)(implicit s: Session): Boolean = {
-    sql"select pgq.finish_batch(${batchId})".map(_.boolean(1)).single.apply().getOrElse(false)
-  }
-  
-  override def eventRetry(batchId: Long, eventId: Long, retryDuration: Duration)(implicit s: Session) = {
-    sql"select pgq.event_retry(${batchId}, ${eventId}, ${retryDuration.getStandardSeconds().toInt})".execute.apply()
-  }
-
-  override def eventRetry(batchId: Long, eventId: Long, retryTime: DateTime)(implicit s: Session) = {
-    sql"select pgq.event_retry(${batchId}, ${eventId}, ${retryTime})".execute.apply()
-  }
-
-  override def eventFailed(batchId: Long, eventId: Long, reason: String)(implicit s: Session) = {
-    sql"select pgq.event_failed(${batchId}, ${eventId}, ${reason})".execute.apply()
+  def finishBatch(batchId: Long)(implicit s: Session, ec: ExecutionContext): Future[Boolean] = {
+    sql"select pgq.finish_batch(${batchId})".map(_.boolean(1)).single.future().map(_.getOrElse(false))
   }
   
-  def getQueueInfo()(implicit s: Session): Seq[QueueInfo] = {
+  override def eventRetry(batchId: Long, eventId: Long, retryDuration: Duration)(implicit s: Session, ec: ExecutionContext) = {
+    sql"select pgq.event_retry(${batchId}, ${eventId}, ${retryDuration.getStandardSeconds().toInt})".execute.future()
+  }
+
+  override def eventRetry(batchId: Long, eventId: Long, retryTime: DateTime)(implicit s: Session, ec: ExecutionContext) = {
+    sql"select pgq.event_retry(${batchId}, ${eventId}, ${retryTime})".execute.future()
+  }
+
+  override def eventFailed(batchId: Long, eventId: Long, reason: String)(implicit s: Session, ec: ExecutionContext) = {
+    sql"select pgq.event_failed(${batchId}, ${eventId}, ${reason})".execute.future()
+  }
+  
+  override def getQueueInfo()(implicit s: Session, ec: ExecutionContext) = {
     sql"select * from pgq.get_queue_info()"
       .map(rs => new QueueInfo(
         rs.string("queue_name"),
@@ -84,9 +91,9 @@ class PGQOperationsImpl(url: String, user: String, password: String) extends PGQ
         rs.long("last_tick_id")
       ))
       .list
-      .apply()
+      .future()
   }
-  def getQueueInfo(queueName: String)(implicit s: Session): Option[QueueInfo] = {
+  override def getQueueInfo(queueName: String)(implicit s: Session, ec: ExecutionContext): Future[Option[QueueInfo]] = {
     sql"select * from pgq.get_queue_info(${queueName})"
       .map(rs => new QueueInfo(
         rs.string("queue_name"),
@@ -105,10 +112,10 @@ class PGQOperationsImpl(url: String, user: String, password: String) extends PGQ
         rs.long("last_tick_id")
       ))
       .single
-      .apply()
+      .future()
   }
   
-  def getConsumerInfo()(implicit s: Session): Seq[ConsumerInfo] = {
+  override def getConsumerInfo()(implicit s: Session, ec: ExecutionContext): Future[Seq[ConsumerInfo]] = {
     sql"select * from pgq.get_consumer_info()"
       .map(rs => new ConsumerInfo(
         rs.string("queue_name"),
@@ -121,9 +128,9 @@ class PGQOperationsImpl(url: String, user: String, password: String) extends PGQ
         rs.long("pending_events")
       ))
       .list
-      .apply()
+      .future()
   }
-  def getConsumerInfo(queueName: String)(implicit s: Session): Seq[ConsumerInfo] = {
+  override def getConsumerInfo(queueName: String)(implicit s: Session, ec: ExecutionContext): Future[Seq[ConsumerInfo]] = {
     sql"select * from pgq.get_consumer_info(${queueName})"
       .map(rs => new ConsumerInfo(
         rs.string("queue_name"),
@@ -136,9 +143,9 @@ class PGQOperationsImpl(url: String, user: String, password: String) extends PGQ
         rs.long("pending_events")
       ))
       .list
-      .apply()
+      .future()
   }
-  def getConsumerInfo(queueName: String, consumerName: String)(implicit s: Session): Option[ConsumerInfo] = {
+  override def getConsumerInfo(queueName: String, consumerName: String)(implicit s: Session, ec: ExecutionContext): Future[Option[ConsumerInfo]] = {
     sql"select * from pgq.get_consumer_info(${queueName}, ${consumerName})"
       .map(rs => new ConsumerInfo(
         rs.string("queue_name"),
@@ -151,11 +158,11 @@ class PGQOperationsImpl(url: String, user: String, password: String) extends PGQ
         rs.long("pending_events")
       ))
       .first
-      .apply()
+      .future()
   }
   
-  def insertEvent(queueName: String, eventType: String, eventData: String, extra1: String = null, extra2: String = null, extra3: String = null, extra4: String = null)(implicit s: Session): Long = {
-    sql"select pgq.insert_event(${queueName}, ${eventType} , ${eventData}, ${extra1}, ${extra2}, ${extra3}, ${extra4})".map(_.long(1)).single.apply().get
+  override def insertEvent(queueName: String, eventType: String, eventData: String, extra1: String = null, extra2: String = null, extra3: String = null, extra4: String = null)(implicit s: Session, ec: ExecutionContext): Future[Long] = {
+    sql"select pgq.insert_event(${queueName}, ${eventType} , ${eventData}, ${extra1}, ${extra2}, ${extra3}, ${extra4})".map(_.long(1)).single.future().map(_.get)
   }
   
   implicit val array: TypeBinder[Period] = {
@@ -173,6 +180,7 @@ class PGQOperationsImpl(url: String, user: String, password: String) extends PGQ
   
         new Period(years,months, 0, days, hours, mins, seconds,millis).normalizedStandard
       }
+      case p: org.joda.time.Period => p 
     }
   }
 }

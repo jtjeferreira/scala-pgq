@@ -5,7 +5,9 @@ import akka.stream._
 import akka.stream.stage._
 import akka.stream.scaladsl._
 import org.joda.time._
+import scala.util.{Failure, Success, Try}
 import scala.util.control.NonFatal
+import scala.concurrent.Future
 import scala.concurrent.duration._
 
 case class Event(
@@ -87,10 +89,44 @@ class PGQSourceGraphStage(settings: PGQSettings) extends GraphStage[SourceShape[
  
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic =
     new TimerGraphStageLogic(shape) {
-      if(settings.registerConsumer) {
-        ops.localTx { implicit session =>
-          ops.registerConsumer(settings.queueName, settings.consumerName)
+      var registrationCompleted = if(settings.registerConsumer) false else true
+      
+      override def preStart() = {
+        implicit val ec = materializer.executionContext
+        if(settings.registerConsumer) {
+          val registerF = ops.localAsyncTx { implicit s =>
+            ops.registerConsumer(settings.queueName, settings.consumerName)
+          }
+          registerF.onComplete(onRegistrationCallback.invoke)
         }
+      }
+      
+      val onRegistrationCallback = getAsyncCallback[Try[Boolean]] { 
+        case Success(true) => registrationCompleted = true
+        case Success(false) => registrationCompleted = true
+        case Failure(ex) => failStage(ex)
+      }
+      
+      val onBatchCallback = getAsyncCallback[Try[Option[(Long, Iterable[Event])]]] {
+        case Success(Some((batchId,Nil))) => 
+          finishBatch(batchId); scheduleOnce(None, settings.consumerSilencePeriod)
+        case Success(Some((batchId,events))) =>
+          emitMultiple(out, events.iterator, () => finishBatch(batchId))
+        case Success(None) =>
+          scheduleOnce(None, settings.consumerSilencePeriod)
+        case Failure(ex) => 
+          failStage(ex)
+      }
+      
+      val onFinishBatchCallback = getAsyncCallback[Try[Boolean]] { 
+        case Success(true) => ()
+        case Success(false) => failStage(new Exception("finish batch returned false"))
+        case Failure(ex) => failStage(ex)
+      }
+      
+      def finishBatch(batchId: Long) = {
+        implicit val ec = materializer.executionContext
+        ops.localAsyncTx { implicit s => ops.finishBatch(batchId)} onComplete(onFinishBatchCallback.invoke)
       }
       
       setHandler(out, new OutHandler {
@@ -102,23 +138,14 @@ class PGQSourceGraphStage(settings: PGQSettings) extends GraphStage[SourceShape[
       }
       
       def poll(): Unit = {
-        try {
-          //get events in one transaction
-          val batchEvents = ops.localTx { implicit session =>
-            ops.nextBatch(settings.queueName, settings.consumerName).map { batchId => (batchId, ops.getBatchEvents(batchId)) }
+        implicit val ec = materializer.executionContext
+        val batchEvents = ops.localAsyncTx { implicit s =>
+          ops.nextBatch(settings.queueName, settings.consumerName).flatMap {
+            case Some(batchId) => ops.getBatchEvents(batchId).map(events => Some(batchId, events))
+            case None => Future.successful(None)
           }
-          
-          //process them and finish batch in another
-          batchEvents match {
-            case Some((batchId,events)) =>
-              emitMultiple(out, events.iterator, () => ops.localTx { implicit session => ops.finishBatch(batchId);()})
-            case None =>
-              scheduleOnce(None, settings.consumerSilencePeriod)
-          }
-          
-        } catch {
-          case NonFatal(ex) => fail(out, ex)
         }
+        batchEvents.onComplete(onBatchCallback.invoke)
       }
     }
 }
