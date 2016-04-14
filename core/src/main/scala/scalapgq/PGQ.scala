@@ -63,13 +63,11 @@ case class BatchInfo(
   seq_end: Int
 )
 
-trait PGQ {
+class PGQ[S](val opsF: PGQSettings => PGQOperations[S]) {
   def source(settings: PGQSettings): Source[Event, NotUsed] = {
-    Source.fromGraph(new PGQSourceGraphStage(settings))
+    Source.fromGraph(new PGQSourceGraphStage(settings, opsF))
   }
 }
-
-object PGQ extends PGQ
 
 case class PGQSettings(
   val url: String, 
@@ -81,14 +79,13 @@ case class PGQSettings(
   val registerConsumer: Boolean = false
 )
 
-class PGQSourceGraphStage(settings: PGQSettings) extends GraphStage[SourceShape[Event]] {
+class PGQSourceGraphStage[S](settings: PGQSettings, opsFactory: PGQSettings => PGQOperations[S]) extends GraphStage[SourceShape[Event]] {
   val out: Outlet[Event] = Outlet("EventsSource")
   override val shape: SourceShape[Event] = SourceShape(out)
   
-  val ops = new scalalike.PGQOperationsImpl(settings.url, settings.user, settings.password)
- 
   override def createLogic(inheritedAttributes: Attributes): GraphStageLogic =
     new TimerGraphStageLogic(shape) {
+      val ops = opsFactory(settings)
       var registrationCompleted = if(settings.registerConsumer) false else true
       
       override def preStart() = {

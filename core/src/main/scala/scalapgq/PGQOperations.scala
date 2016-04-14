@@ -4,8 +4,7 @@ import org.joda.time.{DateTime,Duration}
 import scala.annotation.tailrec
 import scala.concurrent.{ExecutionContext, Future}
 
-trait PGQOperations {
-  type Session
+abstract class PGQOperations[Session] {
   
   def localAsyncTx[A](execution: Session => Future[A])(implicit ec: ExecutionContext): Future[A]
   

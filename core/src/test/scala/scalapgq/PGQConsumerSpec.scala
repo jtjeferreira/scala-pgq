@@ -9,19 +9,19 @@ import akka.testkit._
 import akka.stream.testkit.scaladsl._
 import scala.concurrent.duration._
 import scala.concurrent.Future
-import scalikejdbc._
 
-class PGQConsumerSpec extends TestKit(ActorSystem("IntegrationSpec")) with WordSpecLike with PGQSpec with Matchers with BeforeAndAfter with Eventually with IntegrationPatience with ScalaFutures {
+abstract class PGQConsumerSpec[S]() extends TestKit(ActorSystem("IntegrationSpec")) with WordSpecLike with PGQSpec with Matchers with BeforeAndAfter with Eventually with IntegrationPatience with ScalaFutures {
   
   implicit val mat = ActorMaterializer()(system)
   implicit val ec = system.dispatcher
   
-  val ops = new scalalike.PGQOperationsImpl(PostgresUrl, PostgresUser, PostgresPassword)
-    
+  def PGQ: PGQ[S]
+  def ops: PGQOperations[S]
+  
   def withQueue(testCode: String => Any) {
     import java.util.UUID.randomUUID
     val queueName = s"test_queue_${randomUUID()}"
-    ops.localAsyncTx { implicit s =>  ops.createQueue(queueName) }.futureValue
+    ops.localAsyncTx { implicit s =>  ops.createQueue(queueName)(s, ec) }.futureValue
     try{
       testCode(queueName)
     } finally {
@@ -46,10 +46,10 @@ class PGQConsumerSpec extends TestKit(ActorSystem("IntegrationSpec")) with WordS
   
   "PGQ streams" should {
     "Try to consume events but error" in {
-      PGQ.source(PGQSettings("jdbc:postgresql://127.0.0.1/db", "wronguser", "wronpass", "queue", "consumer"))
+      PGQ.source(PGQSettings(PostgresUrl, "wronguser", "wronpass", "queue", "consumer"))
         .runWith(TestSink.probe[Event])
         .request(1)
-        .expectError()
+        .expectError().getMessage should include("role \"wronguser\" does not exist")
     }
     
     "Try to consume events from empty queue" in withQueue { queueName => 

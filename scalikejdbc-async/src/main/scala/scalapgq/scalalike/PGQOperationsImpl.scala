@@ -3,12 +3,11 @@ package scalapgq.scalalike
 import scalapgq._
 import org.joda.time.{DateTime, Duration, Period}
 import scala.concurrent.{ExecutionContext, Future}
+import scalikejdbc._
+import scalikejdbc.async._
+import scalikejdbc.async.FutureImplicits._
 
-class PGQOperationsImpl(url: String, user: String, password: String) extends PGQOperations {
-  import scalikejdbc._
-  import scalikejdbc.async._
-  import scalikejdbc.async.FutureImplicits._
-  
+class PGQOperationsImpl(url: String, user: String, password: String) extends PGQOperations[TxAsyncDBSession] {
   type Session = TxAsyncDBSession
   
   val acp = AsyncConnectionPoolFactory.apply(url, user, password, AsyncConnectionPoolSettings(maxPoolSize=1, maxQueueSize=1))
@@ -166,20 +165,7 @@ class PGQOperationsImpl(url: String, user: String, password: String) extends PGQ
   }
   
   implicit val array: TypeBinder[Period] = {
-    val mathContext = new java.math.MathContext(4)
     TypeBinder(_ getObject _)(_ getObject _).map{
-      case ts: org.postgresql.util.PGInterval => {
-        val years = ts.getYears
-        val months = ts.getMonths
-        val days = ts.getDays
-        val hours = ts.getHours
-        val mins = ts.getMinutes
-        val seconds = Math.floor(ts.getSeconds).asInstanceOf[Int]
-        val secondsAsBigDecimal = new java.math.BigDecimal(ts.getSeconds,mathContext)
-        val millis = secondsAsBigDecimal.subtract(new java.math.BigDecimal(seconds)).multiply(new java.math.BigDecimal(1000)).intValue
-  
-        new Period(years,months, 0, days, hours, mins, seconds,millis).normalizedStandard
-      }
       case p: org.joda.time.Period => p 
     }
   }
