@@ -9,15 +9,14 @@ import scala.concurrent.ExecutionContext.Implicits.global
 
 abstract class PGQOperationsSpec extends WordSpec with PGQSpec with Matchers with BeforeAndAfter with Eventually with IntegrationPatience with ScalaFutures with OptionValues {
   
-  val ops: PGQOperations
-  val consumerOps: PGQConsumerOperations
+  val ops: PGQOperations with PGQConsumerOperations
   val queueName = "test_queue"
   val consumerName = "test_consumer"
   
   final def getNextNonEmptyEvents(queueName: String, consumerName: String): Iterable[Event] = {
     eventually {
-      val (batchId, evs) = consumerOps.getNextBatchEvents(queueName, consumerName).futureValue.value
-      consumerOps.finishBatch(batchId)
+      val (batchId, evs) = ops.getNextBatchEvents(queueName, consumerName).futureValue.value
+      ops.finishBatch(batchId)
       evs should not be empty
       evs
     }

@@ -5,20 +5,23 @@ import org.joda.time.{DateTime, Duration, Period}
 import scala.concurrent.{ExecutionContext, Future}
 import scalikejdbc._
 
-class PGQConsumerOperationsImpl(url: String, user: String, password: String) extends PGQConsumerOperations {
+class PGQOperationsImpl(url: String, user: String, password: String) extends PGQOperations with PGQConsumerOperations {
   val cp = ConnectionPool.DEFAULT_CONNECTION_POOL_FACTORY.apply(url, user, password, ConnectionPoolSettings(initialSize = 1, maxSize=1))
   
-  private def localAsyncTx[A](execution: DBSession => A)(implicit ec: ExecutionContext): Future[A] = Future { using(DB(cp.borrow())){db => db.localTx { execution }} } 
+  private def localAsyncTx[A](execution: DBSession => A)(implicit ec: ExecutionContext): Future[A] = Future { using(DB(cp.borrow())){db => db.localTx { execution }} }
   
+  override def createQueue(queueName: String)(implicit ec: ExecutionContext): Future[Boolean] = {
+    localAsyncTx { implicit s => sql"select pgq.create_queue(${queueName})".map(_.boolean(1)).single.apply().getOrElse(false) }
+  }
+  override def dropQueue(queueName: String, force: Boolean = false)(implicit ec: ExecutionContext): Future[Boolean] = {
+    localAsyncTx { implicit s => sql"select pgq.drop_queue(${queueName}, ${force})".map(_.boolean(1)).single.apply().getOrElse(false) }
+  }
+
   override def registerConsumer(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Boolean] = {
-    localAsyncTx { implicit s => 
-      sql"select pgq.register_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.apply().getOrElse(false)
-    }
+    localAsyncTx { implicit s => sql"select pgq.register_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.apply().getOrElse(false) }
   }
   override def unRegisterConsumer(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Boolean] = {
-    localAsyncTx { implicit s => 
-      sql"select pgq.unregister_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.apply().getOrElse(false)
-    }
+    localAsyncTx { implicit s => sql"select pgq.unregister_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.apply().getOrElse(false) }
   }
   
 	override def getNextBatchEvents(queueName: String,consumerName: String)(implicit ec: ExecutionContext): Future[Option[(Long, Iterable[Event])]] = {
@@ -56,30 +59,6 @@ class PGQConsumerOperationsImpl(url: String, user: String, password: String) ext
         rs.stringOpt("ev_extra4")))
       .list
       .apply()
-  }
-}
-
-class PGQOperationsImpl(url: String, user: String, password: String) extends PGQOperations {
-  val cp = ConnectionPool.DEFAULT_CONNECTION_POOL_FACTORY.apply(url, user, password, ConnectionPoolSettings(initialSize = 1, maxSize=1))
-  
-  private def localAsyncTx[A](execution: DBSession => A)(implicit ec: ExecutionContext): Future[A] = Future { using(DB(cp.borrow())){db => db.localTx { execution }} }
-  
-  override def createQueue(queueName: String)(implicit ec: ExecutionContext): Future[Boolean] = {
-    localAsyncTx { implicit s => sql"select pgq.create_queue(${queueName})".map(_.boolean(1)).single.apply().getOrElse(false) }
-  }
-  override def dropQueue(queueName: String, force: Boolean = false)(implicit ec: ExecutionContext): Future[Boolean] = {
-    localAsyncTx { implicit s => sql"select pgq.drop_queue(${queueName}, ${force})".map(_.boolean(1)).single.apply().getOrElse(false) }
-  }
-
-  override def registerConsumer(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Boolean] = {
-    localAsyncTx { implicit s => sql"select pgq.register_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.apply().getOrElse(false) }
-  }
-  override def unRegisterConsumer(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Boolean] = {
-    localAsyncTx { implicit s => sql"select pgq.unregister_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.apply().getOrElse(false) }
-  }
-  
-  def finishBatch(batchId: Long)(implicit ec: ExecutionContext): Future[Boolean] = {
-    localAsyncTx { implicit s => sql"select pgq.finish_batch(${batchId})".map(_.boolean(1)).single.apply().getOrElse(false) }
   }
   
   override def getQueueInfo()(implicit ec: ExecutionContext) = {

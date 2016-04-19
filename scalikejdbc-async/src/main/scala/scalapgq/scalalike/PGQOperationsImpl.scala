@@ -8,15 +8,22 @@ import scalikejdbc._
 import scalikejdbc.async._
 import scalikejdbc.async.FutureImplicits._
 
-class PGQConsumerOperationsImpl(url: String, user: String, password: String) extends PGQConsumerOperations {
+class PGQOperationsImpl(url: String, user: String, password: String) extends PGQOperations with PGQConsumerOperations {
   val acp = AsyncConnectionPoolFactory.apply(url, user, password, AsyncConnectionPoolSettings(maxPoolSize=1, maxQueueSize=1))
   
-  private def localAsyncTx[A](execution: AsyncDBSession => Future[A])(implicit ec: ExecutionContext): Future[A] = {
+  private def localAsyncTx[A](execution: TxAsyncDBSession => Future[A])(implicit ec: ExecutionContext): Future[A] = {
     acp.borrow().toNonSharedConnection()
       .map { nonSharedConnection => TxAsyncDBSession(nonSharedConnection) }
       .flatMap { tx => AsyncTx.inTransaction[A](tx, execution) }
-  } 
+  }
   
+  override def createQueue(queueName: String)(implicit ec: ExecutionContext): Future[Boolean] = {
+    localAsyncTx { implicit s => sql"select pgq.create_queue(${queueName})".map(_.boolean(1)).single.future().map(_.getOrElse(false)) }
+  }
+  override def dropQueue(queueName: String, force: Boolean = false)(implicit ec: ExecutionContext): Future[Boolean] = {
+    localAsyncTx { implicit s => sql"select pgq.drop_queue(${queueName}, ${force})".map(_.boolean(1)).single.future().map(_.getOrElse(false)) }
+  }
+
   override def registerConsumer(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Boolean] = {
     localAsyncTx { implicit s => 
       sql"select pgq.register_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.future().map(_.getOrElse(false))
@@ -64,34 +71,6 @@ class PGQConsumerOperationsImpl(url: String, user: String, password: String) ext
         rs.stringOpt("ev_extra4")))
       .list
       .future()
-  }
-}
-
-class PGQOperationsImpl(url: String, user: String, password: String) extends PGQOperations {
-  val acp = AsyncConnectionPoolFactory.apply(url, user, password, AsyncConnectionPoolSettings(maxPoolSize=1, maxQueueSize=1))
-  
-  private def localAsyncTx[A](execution: TxAsyncDBSession => Future[A])(implicit ec: ExecutionContext): Future[A] = {
-    acp.borrow().toNonSharedConnection()
-      .map { nonSharedConnection => TxAsyncDBSession(nonSharedConnection) }
-      .flatMap { tx => AsyncTx.inTransaction[A](tx, execution) }
-  }
-  
-  override def createQueue(queueName: String)(implicit ec: ExecutionContext): Future[Boolean] = {
-    localAsyncTx { implicit s => sql"select pgq.create_queue(${queueName})".map(_.boolean(1)).single.future().map(_.getOrElse(false)) }
-  }
-  override def dropQueue(queueName: String, force: Boolean = false)(implicit ec: ExecutionContext): Future[Boolean] = {
-    localAsyncTx { implicit s => sql"select pgq.drop_queue(${queueName}, ${force})".map(_.boolean(1)).single.future().map(_.getOrElse(false)) }
-  }
-
-  override def registerConsumer(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Boolean] = {
-    localAsyncTx { implicit s => sql"select pgq.register_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.future().map(_.getOrElse(false)) }
-  }
-  override def unRegisterConsumer(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Boolean] = {
-    localAsyncTx { implicit s => sql"select pgq.unregister_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.future().map(_.getOrElse(false)) }
-  }
-  
-  def finishBatch(batchId: Long)(implicit ec: ExecutionContext): Future[Boolean] = {
-    localAsyncTx { implicit s => sql"select pgq.finish_batch(${batchId})".map(_.boolean(1)).single.future().map(_.getOrElse(false)) }
   }
   
   override def getQueueInfo()(implicit ec: ExecutionContext) = {
