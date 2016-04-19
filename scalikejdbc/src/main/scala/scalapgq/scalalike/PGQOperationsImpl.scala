@@ -1,55 +1,47 @@
 package scalapgq.scalalike
 
-import scala.language.higherKinds
 import scalapgq._
 import org.joda.time.{DateTime, Duration, Period}
 import scala.concurrent.{ExecutionContext, Future}
 import scalikejdbc._
-import scalikejdbc.async._
-import scalikejdbc.async.FutureImplicits._
 
 class PGQConsumerOperationsImpl(url: String, user: String, password: String) extends PGQConsumerOperations {
-  val acp = AsyncConnectionPoolFactory.apply(url, user, password, AsyncConnectionPoolSettings(maxPoolSize=1, maxQueueSize=1))
+  val cp = ConnectionPool.DEFAULT_CONNECTION_POOL_FACTORY.apply(url, user, password, ConnectionPoolSettings(initialSize = 1, maxSize=1))
   
-  private def localAsyncTx[A](execution: AsyncDBSession => Future[A])(implicit ec: ExecutionContext): Future[A] = {
-    acp.borrow().toNonSharedConnection()
-      .map { nonSharedConnection => TxAsyncDBSession(nonSharedConnection) }
-      .flatMap { tx => AsyncTx.inTransaction[A](tx, execution) }
-  } 
+  private def localAsyncTx[A](execution: DBSession => A)(implicit ec: ExecutionContext): Future[A] = Future { using(DB(cp.borrow())){db => db.localTx { execution }} } 
   
   override def registerConsumer(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Boolean] = {
     localAsyncTx { implicit s => 
-      sql"select pgq.register_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.future().map(_.getOrElse(false))
+      sql"select pgq.register_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.apply().getOrElse(false)
     }
   }
   override def unRegisterConsumer(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Boolean] = {
     localAsyncTx { implicit s => 
-      sql"select pgq.unregister_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.future().map(_.getOrElse(false))
+      sql"select pgq.unregister_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.apply().getOrElse(false)
     }
   }
   
 	override def getNextBatchEvents(queueName: String,consumerName: String)(implicit ec: ExecutionContext): Future[Option[(Long, Iterable[Event])]] = {
 	  localAsyncTx { implicit s => 
-	    nextBatch(queueName, consumerName).flatMap {
-	      case Some(batchId) => getBatchEvents(batchId).map(evs => Some(batchId -> evs))
-	      case None => Future.successful(None)
+	    nextBatch(queueName, consumerName) map {
+	      batchId => batchId -> getBatchEvents(batchId)
 	    }
 	  }
 	}
   override def finishBatch(batchId: Long)(implicit ec: ExecutionContext): Future[Boolean] = {
     localAsyncTx { implicit s => 
-	    sql"select pgq.finish_batch(${batchId})".map(_.boolean(1)).single.future().map(_.getOrElse(false))
+	    sql"select pgq.finish_batch(${batchId})".map(_.boolean(1)).single.apply().getOrElse(false)
 	  }
   }
   
-  private def nextBatch(queueName: String, consumerName: String)(implicit s: AsyncDBSession, ec: ExecutionContext): Future[Option[Long]] = {
+  private def nextBatch(queueName: String, consumerName: String)(implicit s: DBSession, ec: ExecutionContext): Option[Long] = {
     sql"select next_batch from pgq.next_batch(${queueName}, ${consumerName})"
       .map(rs => rs.longOpt("next_batch"))
       .single()
-      .future()
-      .map(_.flatten)
+      .apply()
+      .flatten
   }
-  private def getBatchEvents(batchId: Long)(implicit s: AsyncDBSession, ec: ExecutionContext): Future[Iterable[Event]] = {
+  private def getBatchEvents(batchId: Long)(implicit s: DBSession, ec: ExecutionContext): Iterable[Event] = {
     sql"select * from pgq.get_batch_events(${batchId})"
       .map(rs => new Event(
         rs.long("ev_id"),
@@ -63,35 +55,31 @@ class PGQConsumerOperationsImpl(url: String, user: String, password: String) ext
         rs.stringOpt("ev_extra3"),
         rs.stringOpt("ev_extra4")))
       .list
-      .future()
+      .apply()
   }
 }
 
 class PGQOperationsImpl(url: String, user: String, password: String) extends PGQOperations {
-  val acp = AsyncConnectionPoolFactory.apply(url, user, password, AsyncConnectionPoolSettings(maxPoolSize=1, maxQueueSize=1))
+  val cp = ConnectionPool.DEFAULT_CONNECTION_POOL_FACTORY.apply(url, user, password, ConnectionPoolSettings(initialSize = 1, maxSize=1))
   
-  private def localAsyncTx[A](execution: TxAsyncDBSession => Future[A])(implicit ec: ExecutionContext): Future[A] = {
-    acp.borrow().toNonSharedConnection()
-      .map { nonSharedConnection => TxAsyncDBSession(nonSharedConnection) }
-      .flatMap { tx => AsyncTx.inTransaction[A](tx, execution) }
-  }
+  private def localAsyncTx[A](execution: DBSession => A)(implicit ec: ExecutionContext): Future[A] = Future { using(DB(cp.borrow())){db => db.localTx { execution }} }
   
   override def createQueue(queueName: String)(implicit ec: ExecutionContext): Future[Boolean] = {
-    localAsyncTx { implicit s => sql"select pgq.create_queue(${queueName})".map(_.boolean(1)).single.future().map(_.getOrElse(false)) }
+    localAsyncTx { implicit s => sql"select pgq.create_queue(${queueName})".map(_.boolean(1)).single.apply().getOrElse(false) }
   }
   override def dropQueue(queueName: String, force: Boolean = false)(implicit ec: ExecutionContext): Future[Boolean] = {
-    localAsyncTx { implicit s => sql"select pgq.drop_queue(${queueName}, ${force})".map(_.boolean(1)).single.future().map(_.getOrElse(false)) }
+    localAsyncTx { implicit s => sql"select pgq.drop_queue(${queueName}, ${force})".map(_.boolean(1)).single.apply().getOrElse(false) }
   }
 
   override def registerConsumer(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Boolean] = {
-    localAsyncTx { implicit s => sql"select pgq.register_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.future().map(_.getOrElse(false)) }
+    localAsyncTx { implicit s => sql"select pgq.register_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.apply().getOrElse(false) }
   }
   override def unRegisterConsumer(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Boolean] = {
-    localAsyncTx { implicit s => sql"select pgq.unregister_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.future().map(_.getOrElse(false)) }
+    localAsyncTx { implicit s => sql"select pgq.unregister_consumer(${queueName}, ${consumerName})".map(_.boolean(1)).single.apply().getOrElse(false) }
   }
   
   def finishBatch(batchId: Long)(implicit ec: ExecutionContext): Future[Boolean] = {
-    localAsyncTx { implicit s => sql"select pgq.finish_batch(${batchId})".map(_.boolean(1)).single.future().map(_.getOrElse(false)) }
+    localAsyncTx { implicit s => sql"select pgq.finish_batch(${batchId})".map(_.boolean(1)).single.apply().getOrElse(false) }
   }
   
   override def getQueueInfo()(implicit ec: ExecutionContext) = {
@@ -113,7 +101,7 @@ class PGQOperationsImpl(url: String, user: String, password: String) extends PGQ
         rs.long("last_tick_id")
       ))
       .list
-      .future()
+      .apply()
     }
   }
   override def getQueueInfo(queueName: String)(implicit ec: ExecutionContext): Future[Option[QueueInfo]] = {
@@ -135,7 +123,7 @@ class PGQOperationsImpl(url: String, user: String, password: String) extends PGQ
         rs.long("last_tick_id")
       ))
       .single
-      .future()
+      .apply()
     }
   }
   
@@ -152,7 +140,7 @@ class PGQOperationsImpl(url: String, user: String, password: String) extends PGQ
         rs.long("pending_events")
       ))
       .list
-      .future()
+      .apply()
     }
   }
   override def getConsumerInfo(queueName: String)(implicit ec: ExecutionContext): Future[Seq[ConsumerInfo]] = {
@@ -168,7 +156,7 @@ class PGQOperationsImpl(url: String, user: String, password: String) extends PGQ
         rs.long("pending_events")
       ))
       .list
-      .future()
+      .apply()
     }
   }
   override def getConsumerInfo(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Option[ConsumerInfo]] = {
@@ -184,30 +172,37 @@ class PGQOperationsImpl(url: String, user: String, password: String) extends PGQ
         rs.long("pending_events")
       ))
       .first
-      .future()
+      .apply()
     }
   }
   
   override def insertEvent(queueName: String, eventType: String, eventData: String, extra1: String = null, extra2: String = null, extra3: String = null, extra4: String = null)(implicit ec: ExecutionContext): Future[Long] = {
-    localAsyncTx { implicit s => sql"select pgq.insert_event(${queueName}, ${eventType} , ${eventData}, ${extra1}, ${extra2}, ${extra3}, ${extra4})".map(_.long(1)).single.future().map(_.get) }
+    localAsyncTx { implicit s => sql"select pgq.insert_event(${queueName}, ${eventType} , ${eventData}, ${extra1}, ${extra2}, ${extra3}, ${extra4})".map(_.long(1)).single.apply().get }
   }
   
   override def insertEventsTransactionally(queueName: String, eventType: String, eventsData: Seq[String])(implicit ec: ExecutionContext): Future[Seq[Long]] = {
     localAsyncTx { implicit s => 
-      traverseSeq(eventsData){ eventData =>
-        sql"select pgq.insert_event(${queueName}, ${eventType} , ${eventData})".map(_.long(1)).single.future().map(_.get)
+      eventsData.map { eventData =>
+        sql"select pgq.insert_event(${queueName}, ${eventType} , ${eventData})".map(_.long(1)).single.apply().get
       }
     }
   }
   
-  private def traverseSeq[A, B, M[X] <: TraversableOnce[X]](in: M[A])(fn: A => Future[B])(implicit cbf: scala.collection.generic.CanBuildFrom[M[A], B, M[B]], executor: ExecutionContext): Future[M[B]] =
-    in.foldLeft(Future.successful(cbf(in))) { (fr, a) =>
-      for (r <- fr; b <- fn(a)) yield (r += b)
-    }.map(_.result())
-  
   implicit val array: TypeBinder[Period] = {
+    val mathContext = new java.math.MathContext(4)
     TypeBinder(_ getObject _)(_ getObject _).map{
-      case p: org.joda.time.Period => p 
+      case ts: org.postgresql.util.PGInterval => {
+        val years = ts.getYears
+        val months = ts.getMonths
+        val days = ts.getDays
+        val hours = ts.getHours
+        val mins = ts.getMinutes
+        val seconds = Math.floor(ts.getSeconds).asInstanceOf[Int]
+        val secondsAsBigDecimal = new java.math.BigDecimal(ts.getSeconds,mathContext)
+        val millis = secondsAsBigDecimal.subtract(new java.math.BigDecimal(seconds)).multiply(new java.math.BigDecimal(1000)).intValue
+  
+        new Period(years,months, 0, days, hours, mins, seconds,millis).normalizedStandard
+      }
     }
   }
 }

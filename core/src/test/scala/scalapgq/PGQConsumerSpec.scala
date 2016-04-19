@@ -10,22 +10,22 @@ import akka.stream.testkit.scaladsl._
 import scala.concurrent.duration._
 import scala.concurrent.Future
 
-abstract class PGQConsumerSpec[S]() extends TestKit(ActorSystem("IntegrationSpec")) with WordSpecLike with PGQSpec with Matchers with BeforeAndAfter with Eventually with IntegrationPatience with ScalaFutures {
+abstract class PGQConsumerSpec() extends TestKit(ActorSystem("IntegrationSpec")) with WordSpecLike with PGQSpec with Matchers with BeforeAndAfter with Eventually with IntegrationPatience with ScalaFutures {
   
   implicit val mat = ActorMaterializer()(system)
   implicit val ec = system.dispatcher
   
-  def PGQ: PGQ[S]
-  def ops: PGQOperations[S]
+  def PGQ: PGQ
+  def ops: PGQOperations
   
   def withQueue(testCode: String => Any) {
     import java.util.UUID.randomUUID
     val queueName = s"test_queue_${randomUUID()}"
-    ops.localAsyncTx { implicit s =>  ops.createQueue(queueName)(s, ec) }.futureValue
+    ops.createQueue(queueName).futureValue
     try{
       testCode(queueName)
     } finally {
-      ops.localAsyncTx { implicit s =>  ops.dropQueue(queueName, force = true) }.futureValue
+      ops.dropQueue(queueName, force = true).futureValue
     }
   }
   
@@ -33,13 +33,9 @@ abstract class PGQConsumerSpec[S]() extends TestKit(ActorSystem("IntegrationSpec
     withQueue { queueName =>
       import java.util.UUID.randomUUID
       val consumerName = s"test_consumer_${randomUUID()}"
-      ops.localAsyncTx { implicit session => ops.registerConsumer(queueName, consumerName) }.futureValue
+      ops.registerConsumer(queueName, consumerName).futureValue
       
-      (1 to n) foreach { i =>
-        ops.localAsyncTx { implicit session =>
-           ops.insertEvent(queueName, "eventType", s"eventData_$i")
-        }.futureValue
-      }
+      ops.insertEventsTransactionally(queueName,"eventType", (1 to n).map(i => s"eventData_$i")).futureValue
       testCode(queueName, consumerName)
     }
   }
@@ -92,9 +88,7 @@ abstract class PGQConsumerSpec[S]() extends TestKit(ActorSystem("IntegrationSpec
         .request(1)
         .expectNoMsg()
         
-      val eventId = ops.localAsyncTx { implicit s =>
-        ops.insertEvent(queueName, "eventType", "eventData")  
-      }.futureValue
+      ops.insertEvent(queueName, "eventType", "eventData").futureValue
       downstream.request(1).receiveWithin(6 seconds, 1)
 
       switch.shutdown()
@@ -123,9 +117,4 @@ abstract class PGQConsumerSpec[S]() extends TestKit(ActorSystem("IntegrationSpec
       ev1 shouldEqual ev2
     }
   }
-  
-  
-  
-  
-  
 }

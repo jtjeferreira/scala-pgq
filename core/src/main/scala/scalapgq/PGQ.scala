@@ -63,7 +63,7 @@ case class BatchInfo(
   seq_end: Int
 )
 
-class PGQ[S](val opsF: PGQSettings => PGQOperations[S]) {
+class PGQ(val opsF: PGQSettings => PGQConsumerOperations) {
   def source(settings: PGQSettings): Source[Event, NotUsed] = {
     Source.fromGraph(new PGQSourceGraphStage(settings, opsF))
   }
@@ -79,7 +79,7 @@ case class PGQSettings(
   val registerConsumer: Boolean = false
 )
 
-class PGQSourceGraphStage[S](settings: PGQSettings, opsFactory: PGQSettings => PGQOperations[S]) extends GraphStage[SourceShape[Event]] {
+class PGQSourceGraphStage(settings: PGQSettings, opsFactory: PGQSettings => PGQConsumerOperations) extends GraphStage[SourceShape[Event]] {
   val out: Outlet[Event] = Outlet("EventsSource")
   override val shape: SourceShape[Event] = SourceShape(out)
   
@@ -91,10 +91,7 @@ class PGQSourceGraphStage[S](settings: PGQSettings, opsFactory: PGQSettings => P
       override def preStart() = {
         implicit val ec = materializer.executionContext
         if(settings.registerConsumer) {
-          val registerF = ops.localAsyncTx { implicit s =>
-            ops.registerConsumer(settings.queueName, settings.consumerName)
-          }
-          registerF.onComplete(onRegistrationCallback.invoke)
+          ops.registerConsumer(settings.queueName, settings.consumerName) onComplete(onRegistrationCallback.invoke)
         }
       }
       
@@ -123,7 +120,7 @@ class PGQSourceGraphStage[S](settings: PGQSettings, opsFactory: PGQSettings => P
       
       def finishBatch(batchId: Long) = {
         implicit val ec = materializer.executionContext
-        ops.localAsyncTx { implicit s => ops.finishBatch(batchId)} onComplete(onFinishBatchCallback.invoke)
+        ops.finishBatch(batchId) onComplete(onFinishBatchCallback.invoke)
       }
       
       setHandler(out, new OutHandler {
@@ -136,12 +133,7 @@ class PGQSourceGraphStage[S](settings: PGQSettings, opsFactory: PGQSettings => P
       
       def poll(): Unit = {
         implicit val ec = materializer.executionContext
-        val batchEvents = ops.localAsyncTx { implicit s =>
-          ops.nextBatch(settings.queueName, settings.consumerName).flatMap {
-            case Some(batchId) => ops.getBatchEvents(batchId).map(events => Some(batchId, events))
-            case None => Future.successful(None)
-          }
-        }
+        val batchEvents =  ops.getNextBatchEvents(settings.queueName, settings.consumerName)
         batchEvents.onComplete(onBatchCallback.invoke)
       }
     }

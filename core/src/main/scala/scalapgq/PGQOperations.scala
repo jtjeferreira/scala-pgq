@@ -4,31 +4,32 @@ import org.joda.time.{DateTime,Duration}
 import scala.annotation.tailrec
 import scala.concurrent.{ExecutionContext, Future}
 
-abstract class PGQOperations[Session] {
+trait PGQConsumerOperations {
+  def registerConsumer(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Boolean]
+  def unRegisterConsumer(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Boolean]
   
-  def localAsyncTx[A](execution: Session => Future[A])(implicit ec: ExecutionContext): Future[A]
+  def getNextBatchEvents(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Option[(Long,Iterable[Event])]]
+  def finishBatch(batchId: Long)(implicit ec: ExecutionContext): Future[Boolean]
+}
+
+trait PGQOperations {
   
-  def createQueue(queueName: String)(implicit s: Session, ec: ExecutionContext): Future[Boolean]
-  def dropQueue(queueName: String, force: Boolean = false)(implicit s: Session, ec: ExecutionContext): Future[Boolean]
+  def createQueue(queueName: String)(implicit ec: ExecutionContext): Future[Boolean]
+  def dropQueue(queueName: String, force: Boolean = false)(implicit ec: ExecutionContext): Future[Boolean]
   
-  def registerConsumer(queueName: String, consumerName: String)(implicit s: Session, ec: ExecutionContext): Future[Boolean]
-  def unRegisterConsumer(queueName: String, consumerName: String)(implicit s: Session, ec: ExecutionContext): Future[Boolean]
+  def registerConsumer(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Boolean]
+  def unRegisterConsumer(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Boolean]
   
-  def nextBatch(queueName: String, consumerName: String)(implicit s: Session, ec: ExecutionContext): Future[Option[Long]]
-  def getBatchEvents(batchId: Long)(implicit s: Session, ec: ExecutionContext): Future[Iterable[Event]]
-  def finishBatch(batchId: Long)(implicit s: Session, ec: ExecutionContext): Future[Boolean]
-  def eventRetry(batchId: Long, eventId: Long, retrySeconds: Duration)(implicit s: Session, ec: ExecutionContext): Future[Boolean]
-  def eventRetry(batchId: Long, eventId: Long, retryTime: DateTime)(implicit s: Session, ec: ExecutionContext): Future[Boolean]
-  def eventFailed(batchId: Long, eventId: Long, reason: String)(implicit s: Session, ec: ExecutionContext): Future[Boolean]
-  
-  def insertEvent(queueName: String, eventType: String, eventData: String)(implicit s: Session, ec: ExecutionContext): Future[Long] = {
+  def insertEvent(queueName: String, eventType: String, eventData: String)(implicit ec: ExecutionContext): Future[Long] = {
     insertEvent(queueName, eventType, eventData, null, null, null, null)
   }
-  def insertEvent(queueName: String, eventType: String, eventData: String, extra1: String, extra2: String, extra3: String, extra4: String)(implicit s: Session, ec: ExecutionContext): Future[Long]
-  def getQueueInfo()(implicit s: Session, ec: ExecutionContext): Future[Seq[QueueInfo]]
-  def getQueueInfo(queueName: String)(implicit s: Session, ec: ExecutionContext): Future[Option[QueueInfo]]
-  def getConsumerInfo()(implicit s: Session, ec: ExecutionContext): Future[Seq[ConsumerInfo]]
-  def getConsumerInfo(queueName: String)(implicit s: Session, ec: ExecutionContext): Future[Seq[ConsumerInfo]]
-  def getConsumerInfo(queueName: String, consumerName: String)(implicit s: Session, ec: ExecutionContext): Future[Option[ConsumerInfo]]
+  def insertEvent(queueName: String, eventType: String, eventData: String, extra1: String, extra2: String, extra3: String, extra4: String)(implicit ec: ExecutionContext): Future[Long]
+  def insertEventsTransactionally(queueName: String, eventType: String, eventsData: Seq[String])(implicit ec: ExecutionContext): Future[Seq[Long]]
+  
+  def getQueueInfo()(implicit ec: ExecutionContext): Future[Seq[QueueInfo]]
+  def getQueueInfo(queueName: String)(implicit ec: ExecutionContext): Future[Option[QueueInfo]]
+  def getConsumerInfo()(implicit ec: ExecutionContext): Future[Seq[ConsumerInfo]]
+  def getConsumerInfo(queueName: String)(implicit ec: ExecutionContext): Future[Seq[ConsumerInfo]]
+  def getConsumerInfo(queueName: String, consumerName: String)(implicit ec: ExecutionContext): Future[Option[ConsumerInfo]]
   
 }
