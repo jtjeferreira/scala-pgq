@@ -89,16 +89,18 @@ class PGQSourceGraphStage(settings: PGQSettings, opsFactory: PGQSettings => PGQC
       var registrationCompleted = if(settings.registerConsumer) false else true
       
       override def preStart() = {
-        implicit val ec = materializer.executionContext
         if(settings.registerConsumer) {
+          implicit val ec = materializer.executionContext
           ops.registerConsumer(settings.queueName, settings.consumerName) onComplete(onRegistrationCallback.invoke)
         }
       }
       
       val onRegistrationCallback = getAsyncCallback[Try[Boolean]] { 
-        case Success(true) => registrationCompleted = true
-        case Success(false) => registrationCompleted = true
-        case Failure(ex) => failStage(ex)
+        case Success(_) =>
+          registrationCompleted = true
+          if(isAvailable(out)) poll()
+        case Failure(ex) =>
+          failStage(ex)
       }
       
       val onBatchCallback = getAsyncCallback[Try[Option[(Long, Iterable[Event])]]] {
@@ -132,9 +134,10 @@ class PGQSourceGraphStage(settings: PGQSettings, opsFactory: PGQSettings => PGQC
       }
       
       def poll(): Unit = {
-        implicit val ec = materializer.executionContext
-        val batchEvents =  ops.getNextBatchEvents(settings.queueName, settings.consumerName)
-        batchEvents.onComplete(onBatchCallback.invoke)
+        if(registrationCompleted) {
+          implicit val ec = materializer.executionContext
+          ops.getNextBatchEvents(settings.queueName, settings.consumerName) onComplete(onBatchCallback.invoke)
+        }
       }
     }
 }

@@ -7,7 +7,7 @@ import scala.concurrent.duration._
 import scala.concurrent.Future
 import scala.concurrent.ExecutionContext.Implicits.global
 
-abstract class PGQOperationsSpec extends WordSpec with PGQSpec with Matchers with BeforeAndAfter with Eventually with IntegrationPatience with ScalaFutures with OptionValues {
+abstract class AbstractPGQOperationsSpec extends WordSpec with PGQSpec with Matchers with BeforeAndAfter with Eventually with IntegrationPatience with ScalaFutures with OptionValues {
   
   val ops: PGQOperations with PGQConsumerOperations
   val queueName = "test_queue"
