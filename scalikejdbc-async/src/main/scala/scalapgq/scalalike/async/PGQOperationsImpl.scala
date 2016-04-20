@@ -1,4 +1,4 @@
-package scalapgq.scalalike
+package scalapgq.scalalike.async
 
 import scala.language.higherKinds
 import scalapgq._
